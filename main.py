@@ -1,10 +1,11 @@
-#Response by local LLM
+#Response and System Operation by local LLM
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
 import torch
 import os
 from transformers import AutoModel, AutoTokenizer
+import re
 
 class RoundedFrame(tk.Canvas):
     def __init__(self, parent, bg="#ffffff", width=200, height=28, corner_radius=32, padding=3, **kwargs):
@@ -33,6 +34,55 @@ class RoundedFrame(tk.Canvas):
         ]
         return self.create_polygon(points, **kwargs, smooth=True)
 
+class SafeSystemOperations:
+    def __init__(self, app):
+        self.app = app
+
+    def check_system_operation(self, question):
+        msgs = [{'role': 'user', 'content': f"Does this request require system operations? Answer only 'yes' or 'no': {question}"}]
+        response = self.app.model.chat(
+            image=None,
+            msgs=msgs,
+            tokenizer=self.app.tokenizer,
+            sampling=True,
+            temperature=0.7,
+            max_length=10
+        )
+        return 'yes' in response.lower()
+
+    def handle_system_operation(self, question):
+        if self.check_system_operation(question):
+            if messagebox.askyesno("System Operation", "This action may require system operations. Do you want to proceed?"):
+                msgs = [{'role': 'user', 'content': f"Generate python code to do the following by windows 11: {question}"}] #Substitute the OS you are using.
+                response = self.app.model.chat(
+                    image=None,
+                    msgs=msgs,
+                    tokenizer=self.app.tokenizer,
+                    sampling=True,
+                    temperature=0.7,
+                    max_length=500
+                )
+            
+                # コードブロックを抽出
+                code_match = re.search(r'```python\n(.*?)```', response, re.DOTALL)
+                if code_match:
+                    code = code_match.group(1)
+                    try:
+                        # コードを実行
+                        exec(code)
+                        result = "Code executed successfully."
+                    except Exception as e:
+                        result = f"Error executing code: {str(e)}"
+                else:
+                    result = "No valid Python code found in the response."
+            
+                # 応答と結果を合わせて返す
+                return f"Response:\n{response}\n\nExecution result:\n{result}"
+            else:
+                return "Operation cancelled by user."
+        else:
+            return None
+
 class IntegratedLLMApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -43,6 +93,7 @@ class IntegratedLLMApp(tk.Tk):
         self.image_path = None
         self.model = None
         self.tokenizer = None
+        self.safe_ops = SafeSystemOperations(self)
 
         self.create_widgets()
         self.load_model()
@@ -148,9 +199,15 @@ class IntegratedLLMApp(tk.Tk):
             self.response_text.update()
 
     def process_question(self, question):
-        msgs = [{'role': 'user', 'content': question}]
+        # システム操作の処理を試みる
+        system_response = self.safe_ops.handle_system_operation(question)
+        if system_response:
+            self.response_text.delete('1.0', tk.END)
+            self.response_text.insert(tk.END, system_response)
+            return
 
-        # チャット応答を生成（サンプリング使用）
+        # 通常の質問処理
+        msgs = [{'role': 'user', 'content': question}]
         res = self.model.chat(
             image=None,
             msgs=msgs,
